@@ -1,0 +1,140 @@
+Parameters:
+    KeyName:
+        Description: The EC2 Key Pair to allow SSH access to the instances
+        Type: AWS::EC2::KeyPair::KeyName
+        ConstraintDescription: must be the name of an existing EC2 KeyPair.
+Resources:      
+   InstanceSecurityGroup:
+     Type: 'AWS::EC2::SecurityGroup'
+     Properties:
+       GroupDescription: Enable SSH access via port 22
+       SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: 0.0.0.0/0
+
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+   ElasticLoadBalancer:
+    Type: 'AWS::ElasticLoadBalancing::LoadBalancer'
+    Properties:
+        AvailabilityZones: 
+             - ap-south-1a
+             - ap-south-1b
+        Listeners: 
+            - InstancePort: '80' 
+              LoadBalancerPort: '80'
+              Protocol: HTTP    
+        HealthCheck:
+              Target: 'HTTP:80/'
+              HealthyThreshold: '3'
+              UnhealthyThreshold: '5'
+              Interval: '30'
+              Timeout: '5'                 
+   AutoscalingGroup:
+    Type: "AWS::AutoScaling::AutoScalingGroup"
+    Properties:
+        AutoScalingGroupName: group2
+        AvailabilityZones:
+            - ap-south-1a
+            - ap-south-1b
+        Cooldown: '300'
+        DesiredCapacity: '2'
+        HealthCheckType: ELB
+        HealthCheckGracePeriod: '300'
+        LaunchConfigurationName: !Ref 'AutoscalingLaunchConfiguration'
+        
+        LoadBalancerNames: 
+            - !Ref ElasticLoadBalancer
+        MaxSize: '4'
+        MetricsCollection:
+            - Granularity: 1Minute
+              Metrics:
+              - 'GroupMinSize'
+              - 'GroupMaxSize'
+        MinSize: '2'
+        NotificationConfigurations:
+            - TopicARN:
+                 Ref: topic4
+              NotificationTypes:
+                - autoscaling:EC2_INSTANCE_LAUNCH
+                - autoscaling:EC2_INSTANCE_LAUNCH_ERROR
+                - autoscaling:EC2_INSTANCE_TERMINATE
+                - autoscaling:EC2_INSTANCE_TERMINATE_ERROR       
+        Tags:
+            - Key: name
+              Value: group
+              PropagateAtLaunch: 'true'
+   topic4:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+       DisplayName: kktopic4
+       Subscription:
+           - Endpoint: kktelaprolu@gmail.com
+             Protocol: email
+       TopicName: kktopic4
+   AutoscalingLaunchConfiguration:
+    Type: 'AWS::AutoScaling::LaunchConfiguration'
+    Properties:
+        ImageId: ami-2014314f
+        InstanceMonitoring: true
+        InstanceType: t2.micro
+        KeyName: !Ref KeyName
+        SecurityGroups:
+            - !Ref InstanceSecurityGroup
+        UserData: 
+            Fn::Base64: !Sub |
+               #!/bin/bash -xe
+               yum install -y httpd
+               yum install -y git
+               git clone https://github.com/demoglot/html-samples-food.git /var/www/html
+               systemctl restart httpd
+               systemctl enable httpd
+     
+   AutoscalingGroupScaleUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref 'AutoscalingGroup'
+      Cooldown: '60'
+      ScalingAdjustment: 1
+   AutoscalingGroupScaleDownPolicy:
+     Type: AWS::AutoScaling::ScalingPolicy
+     Properties:
+       AdjustmentType: ChangeInCapacity
+       AutoScalingGroupName: !Ref 'AutoscalingGroup'
+       Cooldown: '60'
+       ScalingAdjustment: -1
+   CPUAlarmHigh:
+     Type: AWS::CloudWatch::Alarm
+     Properties:
+       AlarmDescription: Scale-up if CPU > 90% for 10 minutes
+       MetricName: CPUUtilization
+       Namespace: AWS/EC2
+       Statistic: Average
+       Period: 300
+       EvaluationPeriods: 2
+       Threshold: 90
+       AlarmActions: [!Ref 'AutoscalingGroupScaleUpPolicy']
+       Dimensions:
+       - Name: AutoScalingGroupName
+         Value: !Ref 'AutoscalingGroup'
+       ComparisonOperator: GreaterThanThreshold
+   CPUAlarmLow:
+     Type: AWS::CloudWatch::Alarm
+     Properties:
+       AlarmDescription: Scale-down if CPU < 70% for 10 minutes
+       MetricName: CPUUtilization
+       Namespace: AWS/EC2
+       Statistic: Average
+       Period: 300
+       EvaluationPeriods: 2
+       Threshold: 70
+       AlarmActions: [!Ref 'AutoscalingGroupScaleDownPolicy']
+       Dimensions:
+       - Name: AutoScalingGroupName
+         Value: !Ref 'AutoscalingGroup'
+       ComparisonOperator: LessThanThreshold
